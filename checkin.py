@@ -1693,24 +1693,45 @@ class CheckIn:
 
         return False
 
-    async def _solve_turnstile(self, page, timeout: int = 30000) -> bool:
+    async def _solve_turnstile(self, page, timeout: int = 45000) -> bool:
         """等待并尝试通过 Cloudflare Turnstile 人机验证"""
         try:
+            # 1. 等待 Turnstile 的 iframe 出现（最多 30 秒）
+            print(f"ℹ️ {self.account_name}: Waiting for Turnstile iframe...")
+            await page.wait_for_selector(
+                'iframe[src*="challenges.cloudflare.com"]', timeout=30000
+            )
+            # 2. 打印所有 frame，便于诊断
+            for i, frame in enumerate(page.frames):
+                print(f"ℹ️ {self.account_name}: frame[{i}] = {frame.url[:100]}")
+            # 3. 进入 challenge iframe 点击复选框
             for frame in page.frames:
                 if "challenges.cloudflare.com" in frame.url:
                     try:
-                        checkbox = frame.locator("input[type='checkbox']")
-                        if await checkbox.count() > 0:
-                            await checkbox.first.click(timeout=5000)
-                            print(f"ℹ️ {self.account_name}: Clicked Turnstile checkbox")
-                    except Exception:
-                        pass
+                        cb = frame.locator("input[type='checkbox']")
+                        await cb.first.wait_for(state="visible", timeout=10000)
+                        await cb.first.click(timeout=5000)
+                        print(f"✅ {self.account_name}: Clicked Turnstile checkbox")
+                    except Exception as e:
+                        print(f"⚠️ {self.account_name}: Checkbox click failed: {e}")
                     break
-            await page.wait_for_function(
-                "() => { const el = document.querySelector('[name=\"cf-turnstile-response\"]');"
-                " return el && el.value && el.value.length > 0; }",
-                timeout=timeout,
-            )
+            # 4. 等待 token 生成（主文档 + challenge frame 都检查）
+            try:
+                await page.wait_for_function(
+                    "() => { const el = document.querySelector('[name=\"cf-turnstile-response\"]');"
+                    " return el && el.value && el.value.length > 0; }",
+                    timeout=timeout,
+                )
+            except Exception:
+                # 主文档没有 token 字段时，可能在 iframe 里
+                for frame in page.frames:
+                    if "challenges.cloudflare.com" in frame.url:
+                        await frame.wait_for_function(
+                            "() => { const el = document.querySelector('[name=\"cf-turnstile-response\"]');"
+                            " return el && el.value && el.value.length > 0; }",
+                            timeout=15000,
+                        )
+                        break
             print(f"✅ {self.account_name}: Turnstile passed")
             return True
         except Exception as e:
