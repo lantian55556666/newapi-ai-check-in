@@ -1818,6 +1818,7 @@ class CheckIn:
                     return False, {"error": "Site browser login form not found"}
 
                 current_url = page.url
+                await self._solve_turnstile(page)   # <-- 新增：提交前先过 Turnstile
                 if not await self._submit_site_login_form(page):
                     await take_screenshot(page, "site_login_submit_not_found", self.account_name)
                     return False, {"error": "Site browser login submit not found"}
