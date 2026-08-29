@@ -1693,88 +1693,52 @@ class CheckIn:
 
         return False
 
-    async def _solve_turnstile(self, page, timeout: int = 45000) -> bool:
+    async def _solve_turnstile(self, page, timeout: int = 60000) -> bool:
         """等待并尝试通过 Cloudflare Turnstile 人机验证"""
         try:
-            # 1. 等待 Turnstile 的 iframe 出现
-            print(f"ℹ️ {self.account_name}: Waiting for Turnstile iframe...")
-            try:
-                await page.wait_for_selector(
-                    'iframe[src*="challenges.cloudflare.com"]', timeout=20000
-                )
-            except Exception:
-                # 诊断：打印所有 frame 和页面上所有 iframe 的信息
-                print(f"🔍 {self.account_name}: --- DIAGNOSTIC START ---")
-                for i, frame in enumerate(page.frames):
-                    print(f"🔍 {self.account_name}: frame[{i}] = {frame.url[:150]}")
-                iframes = await page.evaluate(
-                    """() => Array.from(document.querySelectorAll('iframe')).map(f => ({
-                        src: f.src, id: f.id, name: f.name,
-                        w: f.offsetWidth, h: f.offsetHeight
-                    }))"""
-                )
-                print(f"🔍 {self.account_name}: iframes in DOM: {iframes}")
-                # 检查 shadow DOM 里是否有 iframe
-                shadow_info = await page.evaluate(
-                    """() => {
-                        const out = [];
-                        const walk = (root, path) => {
-                            for (const el of root.querySelectorAll('*')) {
-                                if (el.shadowRoot) {
-                                    out.push(path + el.tagName + '/shadowRoot');
-                                    walk(el.shadowRoot, path + el.tagName + '>');
-                                }
-                            }
-                        };
-                        walk(document, '');
-                        return out;
-                    }"""
-                )
-                print(f"🔍 {self.account_name}: shadow roots: {shadow_info}")
-                # 查找 Turnstile 容器
-                tw = await page.evaluate(
-                    """() => {
-                        const el = document.querySelector('[class*="turnstile"], [class*="cf-"], [id*="turnstile"]');
-                        return el ? {tag: el.tagName, id: el.id, cls: el.className,
-                                     html: el.outerHTML.slice(0, 500)} : null;
-                    }"""
-                )
-                print(f"🔍 {self.account_name}: turnstile container: {tw}")
-                print(f"🔍 {self.account_name}: --- DIAGNOSTIC END ---")
+            # 等 challenge frame 出现（attached 即可，不要求可见）
+            await page.wait_for_selector(
+                'iframe[src*="challenges.cloudflare.com"]',
+                state="attached", timeout=30000,
+            )
+            await page.wait_for_timeout(3000)  # 给 challenge 一点渲染时间
 
-            # 2. 打印所有 frame，便于诊断
-            for i, frame in enumerate(page.frames):
-                print(f"ℹ️ {self.account_name}: frame[{i}] = {frame.url[:100]}")
-            # 3. 进入 challenge iframe 点击复选框
-            for frame in page.frames:
-                if "challenges.cloudflare.com" in frame.url:
+            # 方案A：定位 widget iframe 的包围盒，用真实鼠标点击其中心
+            box = None
+            for f in page.frames:
+                if "challenges.cloudflare.com" in f.url:
+                    el = await f.frame_element()
                     try:
-                        cb = frame.locator("input[type='checkbox']")
-                        await cb.first.wait_for(state="visible", timeout=10000)
-                        await cb.first.click(timeout=5000)
-                        print(f"✅ {self.account_name}: Clicked Turnstile checkbox")
-                    except Exception as e:
-                        print(f"⚠️ {self.account_name}: Checkbox click failed: {e}")
+                        box = await el.bounding_box()
+                    except Exception:
+                        box = None
                     break
-            # 4. 等待 token 生成（主文档 + challenge frame 都检查）
-            try:
-                await page.wait_for_function(
-                    "() => { const el = document.querySelector('[name=\"cf-turnstile-response\"]');"
-                    " return el && el.value && el.value.length > 0; }",
-                    timeout=timeout,
+
+            if box and box["width"] > 5 and box["height"] > 5:
+                print(f"ℹ️ {self.account_name}: Clicking widget at "
+                      f"({box['x']+box['width']/2:.0f}, {box['y']+box['height']/2:.0f}), "
+                      f"size {box['width']:.0f}x{box['height']:.0f}")
+                await page.mouse.move(box["x"] + box["width"]/2, box["y"] + box["height"]/2)
+                await page.wait_for_timeout(300)
+                await page.mouse.click(box["x"] + box["width"]/2, box["y"] + box["height"]/2)
+            else:
+                print(f"⚠️ {self.account_name}: Widget box invalid/hidden: {box}")
+
+            # 方案B：轮询等待 token，最多 60 秒
+            for i in range(12):
+                await page.wait_for_timeout(5000)
+                token = await page.evaluate(
+                    """() => {
+                        const el = document.querySelector('[name="cf-turnstile-response"]');
+                        return el && el.value ? el.value.slice(0, 20) + '...' : null;
+                    }"""
                 )
-            except Exception:
-                # 主文档没有 token 字段时，可能在 iframe 里
-                for frame in page.frames:
-                    if "challenges.cloudflare.com" in frame.url:
-                        await frame.wait_for_function(
-                            "() => { const el = document.querySelector('[name=\"cf-turnstile-response\"]');"
-                            " return el && el.value && el.value.length > 0; }",
-                            timeout=15000,
-                        )
-                        break
-            print(f"✅ {self.account_name}: Turnstile passed")
-            return True
+                if token:
+                    print(f"✅ {self.account_name}: Turnstile passed, token={token}")
+                    return True
+                print(f"ℹ️ {self.account_name}: token not ready ({(i+1)*5}s)")
+            print(f"⚠️ {self.account_name}: Turnstile not solved within {timeout}ms")
+            return False
         except Exception as e:
             print(f"⚠️ {self.account_name}: Turnstile not solved: {e}")
             return False
