@@ -1696,11 +1696,52 @@ class CheckIn:
     async def _solve_turnstile(self, page, timeout: int = 45000) -> bool:
         """等待并尝试通过 Cloudflare Turnstile 人机验证"""
         try:
-            # 1. 等待 Turnstile 的 iframe 出现（最多 30 秒）
+            # 1. 等待 Turnstile 的 iframe 出现
             print(f"ℹ️ {self.account_name}: Waiting for Turnstile iframe...")
-            await page.wait_for_selector(
-                'iframe[src*="challenges.cloudflare.com"]', timeout=30000
-            )
+            try:
+                await page.wait_for_selector(
+                    'iframe[src*="challenges.cloudflare.com"]', timeout=20000
+                )
+            except Exception:
+                # 诊断：打印所有 frame 和页面上所有 iframe 的信息
+                print(f"🔍 {self.account_name}: --- DIAGNOSTIC START ---")
+                for i, frame in enumerate(page.frames):
+                    print(f"🔍 {self.account_name}: frame[{i}] = {frame.url[:150]}")
+                iframes = await page.evaluate(
+                    """() => Array.from(document.querySelectorAll('iframe')).map(f => ({
+                        src: f.src, id: f.id, name: f.name,
+                        w: f.offsetWidth, h: f.offsetHeight
+                    }))"""
+                )
+                print(f"🔍 {self.account_name}: iframes in DOM: {iframes}")
+                # 检查 shadow DOM 里是否有 iframe
+                shadow_info = await page.evaluate(
+                    """() => {
+                        const out = [];
+                        const walk = (root, path) => {
+                            for (const el of root.querySelectorAll('*')) {
+                                if (el.shadowRoot) {
+                                    out.push(path + el.tagName + '/shadowRoot');
+                                    walk(el.shadowRoot, path + el.tagName + '>');
+                                }
+                            }
+                        };
+                        walk(document, '');
+                        return out;
+                    }"""
+                )
+                print(f"🔍 {self.account_name}: shadow roots: {shadow_info}")
+                # 查找 Turnstile 容器
+                tw = await page.evaluate(
+                    """() => {
+                        const el = document.querySelector('[class*="turnstile"], [class*="cf-"], [id*="turnstile"]');
+                        return el ? {tag: el.tagName, id: el.id, cls: el.className,
+                                     html: el.outerHTML.slice(0, 500)} : null;
+                    }"""
+                )
+                print(f"🔍 {self.account_name}: turnstile container: {tw}")
+                print(f"🔍 {self.account_name}: --- DIAGNOSTIC END ---")
+
             # 2. 打印所有 frame，便于诊断
             for i, frame in enumerate(page.frames):
                 print(f"ℹ️ {self.account_name}: frame[{i}] = {frame.url[:100]}")
