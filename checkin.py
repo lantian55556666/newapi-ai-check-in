@@ -1696,12 +1696,30 @@ class CheckIn:
     async def _solve_turnstile(self, page, timeout: int = 60000) -> bool:
         """等待并尝试通过 Cloudflare Turnstile 人机验证"""
         try:
-            # 等 challenge frame 出现（attached 即可，不要求可见）
-            await page.wait_for_selector(
-                'iframe[src*="challenges.cloudflare.com"]',
-                state="attached", timeout=30000,
-            )
-            await page.wait_for_timeout(3000)  # 给 challenge 一点渲染时间
+            
+            # 轮询 page.frames，最多 60 秒，而不是等 DOM 选择器
+            cf_frame = None
+            for i in range(30):
+                for f in page.frames:
+                    if "challenges.cloudflare.com" in (f.url or ""):
+                        cf_frame = f
+                        break
+                if cf_frame:
+                    print(f"ℹ️ {self.account_name}: Turnstile frame found after {(i+1)*2}s")
+                    break
+                await page.wait_for_timeout(2000)
+
+            if not cf_frame:
+                # frames 里也没有 → 真没渲染，记录 DOM 诊断后放弃
+                html = await page.content()
+                print(f"⚠️ {self.account_name}: No CF frame in page.frames")
+                print(f"🔍 {self.account_name}: DOM contains cf-turnstile: "
+                      f"{'cf-turnstile' in html}, sign-in form: {'sign-in' in html}")
+                return False
+
+            await page.wait_for_timeout(3000)  # 给渲染留时间
+            # …… 后续 bounding_box 点击 + 轮询 token 逻辑不变
+
 
             # 方案A：定位 widget iframe 的包围盒，用真实鼠标点击其中心
             box = None
