@@ -1694,7 +1694,7 @@ class CheckIn:
         return False
 
     async def _solve_turnstile(self, page, timeout: int = 30000) -> bool:
-    """等待并尝试通过 Cloudflare Turnstile 人机验证"""
+        """等待并尝试通过 Cloudflare Turnstile 人机验证"""
         try:
             for frame in page.frames:
                 if "challenges.cloudflare.com" in frame.url:
