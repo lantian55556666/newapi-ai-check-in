@@ -1846,6 +1846,13 @@ class CheckIn:
 
             page = await context.new_page()
             try:
+                # 清掉可能被污染的 cf_clearance，保留 session 等 cookie
+                try:
+                    await page.context.clear_cookies(name="cf_clearance")
+                    print(f"ℹ️ {self.account_name}: Cleared cf_clearance cookie")
+                except Exception as e:
+                    print(f"⚠️ {self.account_name}: Failed to clear cf_clearance: {e}")
+                    
                 await page.goto(self.provider_config.get_login_url(), wait_until="domcontentloaded")
                 try:
                     await page.wait_for_load_state("networkidle", timeout=10000)
