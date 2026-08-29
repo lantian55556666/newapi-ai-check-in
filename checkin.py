@@ -1693,6 +1693,32 @@ class CheckIn:
 
         return False
 
+    async def _solve_turnstile(self, page, timeout: int = 30000) -> bool:
+    """等待并尝试通过 Cloudflare Turnstile 人机验证"""
+    try:
+        # Turnstile 渲染在 challenges.cloudflare.com 的跨域 iframe 中
+        for frame in page.frames:
+            if "challenges.cloudflare.com" in frame.url:
+                try:
+                    checkbox = frame.locator("input[type='checkbox']")
+                    if await checkbox.count() > 0:
+                        await checkbox.first.click(timeout=5000)
+                        print(f"ℹ️ {self.account_name}: Clicked Turnstile checkbox")
+                except Exception:
+                    pass  # 不可交互式挑战无需点击，等 token 即可
+                break
+        # 等待验证通过：成功后隐藏字段 cf-turnstile-response 会有值
+        await page.wait_for_function(
+            "() => { const el = document.querySelector('[name=\"cf-turnstile-response\"]');"
+            " return el && el.value && el.value.length > 0; }",
+            timeout=timeout,
+        )
+        print(f"✅ {self.account_name}: Turnstile passed")
+        return True
+    except Exception as e:
+        print(f"⚠️ {self.account_name}: Turnstile not solved: {e}")
+        return False
+
     async def _read_site_api_user_from_browser(self, page, cookies: dict, common_headers: dict) -> str | int | None:
         """从浏览器 localStorage 或 /api/user/self 获取用户 ID。"""
         try:
